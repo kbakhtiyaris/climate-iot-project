@@ -6,7 +6,8 @@ Features:
 - Download using KaggleHub (adapter or direct) when available.
 - Reliable fallback to Kaggle CLI if KaggleHub API changes or isn't present.
 - Organizes files under `data/raw/` and unzips archives.
-- Loads the first CSV found or a specific file path.
+- Loads Parquet preferentially (fast & compact), otherwise CSV.
+- Helpful errors if Parquet engine (pyarrow/fastparquet) is missing.
 
 Usage:
     from src.data_loader import download_kaggle_dataset, load_weather_data
@@ -17,12 +18,12 @@ Usage:
         output_dir="data/raw",
     )
 
-    # Load (first CSV in data/raw)
+    # Load (prefers Parquet if present)
     df = load_weather_data()
     print(df.head())
 
     # Or load a specific file
-    df = load_weather_data(file_path="data/raw/global_daily_climate_data.csv")
+    df = load_weather_data(file_path="data/raw/daily_weather.parquet")
 """
 
 from __future__ import annotations
@@ -285,48 +286,55 @@ def load_weather_data(
     pandas_kwargs: Optional[dict] = None,
 ) -> pd.DataFrame:
     """
-    Load weather CSV (or parquet) data.
+    Load weather data from Parquet or CSV.
 
-    Args:
-        file_path: If provided, load that file (CSV or parquet).
-        search_dir: If file_path is None, search this directory for the first CSV (or parquet).
-        pandas_kwargs: Optional dict passed to pandas reader (e.g., dtype, parse_dates).
-
-    Returns:
-        pd.DataFrame
-
-    Raises:
-        FileNotFoundError if no suitable file is found.
+    Strategy:
+      - If file_path provided, load that (supports .parquet and .csv).
+      - Else:
+        * Prefer Parquet if present.
+        * Fallback to CSV—prefer names containing 'daily' or 'climate'; otherwise pick largest by size.
     """
-    if file_path is None:
-        raw_dir = Path(search_dir).resolve()
-        # Prefer CSV; fallback to parquet
-        csv_files = sorted(raw_dir.glob("*.csv"))
-        if csv_files:
-            file_path = csv_files[0]
-        else:
-            pq_files = sorted(raw_dir.glob("*.parquet"))
-            if pq_files:
-                file_path = pq_files[0]
-            else:
-                raise FileNotFoundError(f"No CSV or parquet files found in {raw_dir}")
+    pandas_kwargs = pandas_kwargs or {}
+    raw_dir = Path(search_dir).resolve()
 
-    file_path = Path(file_path).resolve()
+    if file_path is None:
+        # Prefer Parquet
+        pq_files = sorted(raw_dir.glob("*.parquet"))
+        if pq_files:
+            file_path = pq_files[0]
+        else:
+            # Fall back to CSVs
+            csv_files = sorted(raw_dir.glob("*.csv"))
+            if not csv_files:
+                raise FileNotFoundError(f"No Parquet or CSV files found in {raw_dir}")
+            preferred = [p for p in csv_files if "daily" in p.name.lower() or "climate" in p.name.lower()]
+            file_path = preferred[0] if preferred else max(csv_files, key=lambda p: p.stat().st_size)
+    else:
+        file_path = Path(file_path).resolve()
+
     if not file_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
 
-    logger.info("Loading data from: %s", file_path)
+    logger.info(f"Loading data from: {file_path}")
+    try:
+        if file_path.suffix.lower() in (".parquet", ".pq"):
+            # Parquet requires pyarrow or fastparquet
+            df = pd.read_parquet(file_path, **pandas_kwargs)
+        elif file_path.suffix.lower() == ".csv":
+            df = pd.read_csv(file_path, **pandas_kwargs)
+        else:
+            raise ValueError(f"Unsupported file type: {file_path.suffix}")
+    except ImportError as e:
+        if file_path.suffix.lower() in (".parquet", ".pq"):
+            raise ImportError(
+                "Reading Parquet requires pyarrow or fastparquet. Install with:\n"
+                "  pip install pyarrow\n"
+                "or:\n"
+                "  pip install fastparquet"
+            ) from e
+        raise
 
-    kwargs = pandas_kwargs or {}
-
-    if file_path.suffix.lower() == ".csv":
-        df = pd.read_csv(file_path, **kwargs)
-    elif file_path.suffix.lower() in (".parquet", ".pq"):
-        df = pd.read_parquet(file_path, **kwargs)
-    else:
-        raise ValueError(f"Unsupported file type: {file_path.suffix}")
-
-    logger.info("Data shape: %s; Columns: %s", df.shape, list(df.columns))
+    logger.info(f"Data shape: {df.shape}; Columns: {list(df.columns)}")
     return df
 
 
@@ -367,12 +375,8 @@ def load_with_adapter_if_possible(
 # -----------------------------------------------------------------------------
 # Script entry point (quick test)
 # -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-# Script entry point (quick test)
-# -----------------------------------------------------------------------------
 if __name__ == "__main__":
-       # Quick test flow:
+    # Quick test flow:
     DATASET = "guillemservera/global-daily-climate-data"
     OUTDIR = "data/raw"
 
@@ -381,10 +385,9 @@ if __name__ == "__main__":
         dest = download_kaggle_dataset(dataset_name=DATASET, output_dir=OUTDIR, prefer="auto")
         logger.info("Downloaded to: %s", dest)
 
-        # Load first CSV found
+        # Load (prefers Parquet)
         df = load_weather_data(search_dir=OUTDIR)
         print(df.head())
 
     except Exception as exc:
         logger.error("Test run failed: %s", exc)
-
