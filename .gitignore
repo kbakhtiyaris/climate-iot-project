@@ -247,3 +247,4 @@ logs/*
 # OS
 Thumbs.db
 
+timescaledb/
