@@ -1,4 +1,4 @@
-# dashboards/app.py
+
 """
 Streamlit Dashboard for Global Climate Data IoT Platform
 Real-time visualization and forecasting of global weather patterns
@@ -40,15 +40,15 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# ============================================================================
+
 # HEADER
-# ============================================================================
+
 st.markdown("## 🌍 Global Climate Data IoT Platform")
 st.markdown("**Real-time weather monitoring, analysis, and forecasting**")
 
-# ============================================================================
+
 # SIDEBAR - FILTERS
-# ============================================================================
+
 with st.sidebar:
     st.header("⚙️ Configuration")
     
@@ -92,16 +92,16 @@ with st.sidebar:
     st.divider()
     st.info("💡 **Tip**: Select multiple cities to compare climate patterns across regions.")
 
-# ============================================================================
+
 # MAIN CONTENT - TABS
-# ============================================================================
+
 tab1, tab2, tab3, tab4 = st.tabs(
     ["📊 Overview", "📈 Trends", "🔮 Forecast", "📉 Analytics"]
 )
 
-# ============================================================================
+
 # TAB 1: OVERVIEW
-# ============================================================================
+
 with tab1:
     st.header("📊 Current Climate Overview")
     
@@ -171,9 +171,9 @@ with tab1:
         })
         st.dataframe(city_data, use_container_width=True, hide_index=True)
 
-# ============================================================================
+
 # TAB 2: TRENDS
-# ============================================================================
+
 with tab2:
     st.header("📈 Historical Trends")
     
@@ -233,9 +233,9 @@ with tab2:
     fig_corr.update_layout(height=400)
     st.plotly_chart(fig_corr, use_container_width=True)
 
-# ============================================================================
+
 # TAB 3: FORECAST
-# ============================================================================
+
 with tab3:
     st.header("🔮 Weather Forecast")
     
@@ -305,9 +305,9 @@ with tab3:
     with col4:
         st.metric("MAPE", "8.2%", "↓ -0.5%")
 
-# ============================================================================
+
 # TAB 4: ANALYTICS
-# ============================================================================
+
 with tab4:
     st.header("📉 Advanced Analytics")
     
@@ -365,9 +365,9 @@ with tab4:
     st.warning(f"⚠️ **{len(detected_anomalies)} anomalies detected!**")
     st.dataframe(detected_anomalies, use_container_width=True, hide_index=True)
 
-# ============================================================================
+
 # FOOTER
-# ============================================================================
+
 st.divider()
 st.markdown("""
     ---
