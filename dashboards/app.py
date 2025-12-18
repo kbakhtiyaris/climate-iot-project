@@ -42,6 +42,7 @@ if "live_data" not in st.session_state:
 if "realtime_running" not in st.session_state:
     st.session_state["realtime_running"] = False
 
+<<<<<<< HEAD
 
 def fetch_current_for_cities(cities, api_key, max_points=300):
     """Fetch current weather for a list of cities and append to session_state live_data."""
@@ -90,6 +91,8 @@ def simple_forecast_from_series(series_timestamps, series_temps, forecast_days):
     lower = preds - 2.0
     return pd.DataFrame({'Date': future_dates, 'Forecast': preds, 'Upper_CI': upper, 'Lower_CI': lower})
 
+=======
+>>>>>>> 43911932ad1428cffb1ea275197b5af34e3bd894
 # Page Configuration
 st.set_page_config(
     page_title="🌍 Global Climate IoT Dashboard",
@@ -184,8 +187,11 @@ with st.sidebar:
         value=30,
         step=5
     )
+<<<<<<< HEAD
 
     update_now = st.button("🔄 Update Now")
+=======
+>>>>>>> 43911932ad1428cffb1ea275197b5af34e3bd894
     
     st.divider()
     st.info("💡 **Tip**: Select multiple cities to compare climate patterns across regions.")
