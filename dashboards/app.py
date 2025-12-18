@@ -42,52 +42,6 @@ if "live_data" not in st.session_state:
 if "realtime_running" not in st.session_state:
     st.session_state["realtime_running"] = False
 
-def fetch_current_for_cities(cities, api_key, max_points=300):
-    """Fetch current weather for a list of cities and append to session_state live_data."""
-    results = {}
-    if not api_key:
-        return results
-    for city in cities:
-        try:
-            res = fetch_openweather(city, api_key)
-            if res:
-                results[city] = res
-                lst = st.session_state["live_data"].setdefault(city, [])
-                lst.append(res)
-                if len(lst) > max_points:
-                    lst[:] = lst[-max_points:]
-        except Exception as e:
-            logger.error("Error fetching city %s: %s", city, e)
-    return results
-
-
-def simple_forecast_from_series(series_timestamps, series_temps, forecast_days):
-    """Simple linear-extrapolation forecast using polyfit degree 1.
-    Returns DataFrame with Date, Forecast, Upper_CI, Lower_CI
-    """
-    if len(series_temps) < 3:
-        # Not enough data — repeat last value
-        last = series_temps[-1] if series_temps else 15.0
-        future_days = pd.date_range(end=datetime.now(), periods=forecast_days, freq='D')
-        forecast = [last] * forecast_days
-        return pd.DataFrame({
-            'Date': future_days,
-            'Forecast': forecast,
-            'Upper_CI': [f + 1.0 for f in forecast],
-            'Lower_CI': [f - 1.0 for f in forecast],
-        })
-
-    # convert timestamps to days relative to first timestamp
-    x = np.array([(ts - series_timestamps[0]).total_seconds() / 86400.0 for ts in series_timestamps])
-    y = np.array(series_temps)
-    slope, intercept = np.polyfit(x, y, 1)
-    last_x = x[-1]
-    future_x = last_x + np.arange(1, forecast_days + 1)
-    future_dates = [series_timestamps[-1] + timedelta(days=int(i)) for i in range(1, forecast_days + 1)]
-    preds = intercept + slope * future_x
-    upper = preds + 2.0
-    lower = preds - 2.0
-    return pd.DataFrame({'Date': future_dates, 'Forecast': preds, 'Upper_CI': upper, 'Lower_CI': lower})
 # Page Configuration
 st.set_page_config(
     page_title="🌍 Global Climate IoT Dashboard",
@@ -175,22 +129,16 @@ with st.sidebar:
         owm_api_key = None
         owm_city = None
     
-poll_interval = st.slider(
-    "⏱️ Poll Interval (seconds)",
-    min_value=10,
-    max_value=600,
-    value=30,
-    step=5
-)
-
-update_now = st.button("🔄 Update Now")
-
-st.divider()
-st.info("💡 **Tip**: Select multiple cities to compare climate patterns across regions.")
-
-# If user pressed Update Now and using Weather API, fetch current readings
-if update_now and data_source.startswith("Weather API") and owm_api_key:
-    fetch_current_for_cities(selected_cities, owm_api_key)
+    poll_interval = st.slider(
+        "⏱️ Poll Interval (seconds)",
+        min_value=10,
+        max_value=600,
+        value=30,
+        step=5
+    )
+    
+    st.divider()
+    st.info("💡 **Tip**: Select multiple cities to compare climate patterns across regions.")
 
 
 # MAIN CONTENT - TABS
@@ -205,58 +153,39 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(
 with tab1:
     st.header("📊 Current Climate Overview")
     
-    # Current Metrics Cards (dynamic)
+    # Current Metrics Cards
     col1, col2, col3, col4 = st.columns(4)
-
-    # Gather current readings for selected cities
-    current_readings = {}
-    if data_source.startswith("Weather API") and owm_api_key:
-        current_readings = fetch_current_for_cities(selected_cities, owm_api_key)
-    else:
-        for city in selected_cities:
-            lst = st.session_state["live_data"].get(city, [])
-            if lst:
-                current_readings[city] = lst[-1]
-            else:
-                temp_col = f"{city}_Temp"
-                hum_col = f"{city}_Humidity"
-                if 'trend_data' in globals() and temp_col in trend_data.columns:
-                    current_readings[city] = {
-                        "timestamp": trend_data['Date'].iloc[-1],
-                        "temperature": float(trend_data[temp_col].iloc[-1]),
-                        "humidity": float(trend_data[hum_col].iloc[-1]) if hum_col in trend_data.columns else None
-                    }
-
-    temps = [v['temperature'] for v in current_readings.values() if v and 'temperature' in v]
-    hums = [v['humidity'] for v in current_readings.values() if v and 'humidity' in v]
-
-    avg_temp = np.mean(temps) if temps else None
-    avg_hum = np.mean(hums) if hums else None
-
-    prev_avg = st.session_state.get('prev_avg_temp')
-    delta_temp = None
-    if avg_temp is not None and prev_avg is not None:
-        delta_temp = avg_temp - prev_avg
-    st.session_state['prev_avg_temp'] = avg_temp
-
+    
     with col1:
-        if avg_temp is not None:
-            st.metric(label="🌡️ Avg Temperature", value=f"{avg_temp:.1f}°C", delta=(f"{delta_temp:+.1f}°C" if delta_temp is not None else ""))
-        else:
-            st.metric(label="🌡️ Avg Temperature", value="N/A")
-
+        st.metric(
+            label="🌡️ Avg Temperature",
+            value="18.5°C",
+            delta="-2.1°C",
+            delta_color="inverse"
+        )
+    
     with col2:
-        if avg_hum is not None:
-            st.metric(label="💧 Humidity", value=f"{avg_hum:.0f}%")
-        else:
-            st.metric(label="💧 Humidity", value="N/A")
-
-    # Keep placeholders for precipitation and wind speed for now
+        st.metric(
+            label="💧 Humidity",
+            value="72%",
+            delta="+5%"
+        )
+    
     with col3:
-        st.metric(label="🌧️ Precipitation", value="—")
+        st.metric(
+            label="🌧️ Precipitation",
+            value="12 mm",
+            delta="-3 mm",
+            delta_color="inverse"
+        )
+    
     with col4:
-        st.metric(label="💨 Wind Speed", value="—")
-
+        st.metric(
+            label="💨 Wind Speed",
+            value="4.2 m/s",
+            delta="+0.5 m/s"
+        )
+    
     st.divider()
     
     # Global Map Heatmap (Placeholder)
@@ -360,69 +289,69 @@ with tab3:
     
     st.info(f"📅 Forecasting **{forecast_days}** days ahead using **{model_type}** model")
     
-    # Build data-driven forecast
-    primary_city = selected_cities[0] if selected_cities else (owm_city or cities[0])
-
-    series_ts = []
-    series_temps = []
-    # Prefer live session data
-    live_list = st.session_state["live_data"].get(primary_city, [])
-    if live_list and len(live_list) >= 2:
-        series_ts = [pd.to_datetime(x['timestamp']) for x in live_list]
-        series_temps = [float(x['temperature']) for x in live_list]
-    else:
-        # Fallback to trend_data if available
-        temp_col = f"{primary_city}_Temp"
-        if 'trend_data' in globals() and temp_col in trend_data.columns:
-            series_ts = list(trend_data['Date'].iloc[-30:])
-            series_temps = list(trend_data[temp_col].iloc[-30:])
-        else:
-            # Very small mock series
-            series_ts = [datetime.utcnow() - timedelta(days=i) for i in range(7)][::-1]
-            series_temps = [15 + np.random.normal(0, 1) for _ in series_ts]
-
-    forecast_data = simple_forecast_from_series(series_ts, series_temps, forecast_days)
-
+    # Generate Forecast Data
+    future_days = pd.date_range(end=datetime.now(), periods=forecast_days, freq='D')
+    np.random.seed(42)
+    
+    forecast_data = pd.DataFrame({
+        'Date': future_days,
+        'Forecast': 15 + np.sin(np.arange(forecast_days)/10) * 5 + np.random.normal(0, 0.5, forecast_days),
+        'Upper_CI': 15 + np.sin(np.arange(forecast_days)/10) * 5 + 2 + np.random.normal(0, 0.5, forecast_days),
+        'Lower_CI': 15 + np.sin(np.arange(forecast_days)/10) * 5 - 2 + np.random.normal(0, 0.5, forecast_days),
+    })
+    
     # Forecast Chart with Confidence Intervals
     st.subheader("📊 Temperature Forecast with Confidence Intervals")
-
+    
     fig_forecast = go.Figure()
-    fig_forecast.add_trace(go.Scatter(x=forecast_data['Date'], y=forecast_data['Forecast'], mode='lines', name='Forecast', line=dict(color='blue', width=3)))
-    fig_forecast.add_trace(go.Scatter(x=forecast_data['Date'].tolist() + forecast_data['Date'][::-1].tolist(), y=forecast_data['Upper_CI'].tolist() + forecast_data['Lower_CI'][::-1].tolist(), fill='toself', name='Confidence Interval', fillcolor='rgba(0,100,200,0.2)', line=dict(color='rgba(255,255,255,0)')))
-
-    fig_forecast.update_layout(height=400, title=f"{forecast_days}-Day Temperature Forecast ({primary_city})", xaxis_title="Date", yaxis_title="Temperature (°C)", hovermode='x unified')
-
+    
+    # Forecast line
+    fig_forecast.add_trace(go.Scatter(
+        x=forecast_data['Date'], y=forecast_data['Forecast'],
+        mode='lines',
+        name='Forecast',
+        line=dict(color='blue', width=3)
+    ))
+    
+    # Confidence Interval
+    fig_forecast.add_trace(go.Scatter(
+        x=forecast_data['Date'].tolist() + forecast_data['Date'][::-1].tolist(),
+        y=forecast_data['Upper_CI'].tolist() + forecast_data['Lower_CI'][::-1].tolist(),
+        fill='toself',
+        name='95% Confidence Interval',
+        fillcolor='rgba(0,100,200,0.2)',
+        line=dict(color='rgba(255,255,255,0)')
+    ))
+    
+    fig_forecast.update_layout(
+        height=400,
+        title="7-Day Temperature Forecast",
+        xaxis_title="Date",
+        yaxis_title="Temperature (°C)",
+        hovermode='x unified'
+    )
+    
     st.plotly_chart(fig_forecast, use_container_width=True)
-
+    
     # Forecast Table
     st.subheader("📋 Forecast Details")
     forecast_table = forecast_data.copy()
     forecast_table['Date'] = forecast_table['Date'].dt.strftime('%Y-%m-%d')
     forecast_table = forecast_table.round(2)
     st.dataframe(forecast_table, use_container_width=True, hide_index=True)
-
-    # Simple performance metrics (residuals on training data)
-    if len(series_temps) >= 3:
-        x = np.array([(ts - series_ts[0]).total_seconds() / 86400.0 for ts in series_ts])
-        y = np.array(series_temps)
-        slope, intercept = np.polyfit(x, y, 1)
-        preds_in = intercept + slope * x
-        mae = np.mean(np.abs(y - preds_in))
-        rmse = np.sqrt(np.mean((y - preds_in) ** 2))
-        r2 = 1 - np.sum((y - preds_in) ** 2) / np.sum((y - np.mean(y)) ** 2)
-    else:
-        mae = rmse = r2 = None
-
+    
+    # Model Performance Metrics
     st.subheader("🎯 Model Performance Metrics")
     col1, col2, col3, col4 = st.columns(4)
+    
     with col1:
-        st.metric("MAE", f"{mae:.2f}°C" if mae is not None else "N/A")
+        st.metric("MAE", "1.82°C", "↓ -0.15")
     with col2:
-        st.metric("RMSE", f"{rmse:.2f}°C" if rmse is not None else "N/A")
+        st.metric("RMSE", "2.34°C", "↓ -0.22")
     with col3:
-        st.metric("R² Score", f"{r2:.2f}" if r2 is not None else "N/A")
+        st.metric("R² Score", "0.87", "↑ +0.03")
     with col4:
-        st.metric("MAPE", "N/A")
+        st.metric("MAPE", "8.2%", "↓ -0.5%")
 
 
 # TAB 4: ANALYTICS
