@@ -11,6 +11,9 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
 import logging
+import os
+from dotenv import load_dotenv
+load_dotenv()
 import requests
 import time
 
@@ -41,6 +44,15 @@ if "live_data" not in st.session_state:
 
 if "realtime_running" not in st.session_state:
     st.session_state["realtime_running"] = False
+
+# Extra user-defined cities (persist across reruns)
+if "extra_cities" not in st.session_state:
+    st.session_state["extra_cities"] = []
+
+# Prefill OpenWeather API key from environment into session
+_default_owm = os.getenv("OPENWEATHER_API_KEY", "")
+if _default_owm and "owm_api_key" not in st.session_state:
+    st.session_state["owm_api_key"] = _default_owm
 
 # Page Configuration
 st.set_page_config(
@@ -79,12 +91,37 @@ st.markdown("**Real-time weather monitoring, analysis, and forecasting**")
 with st.sidebar:
     st.header("⚙️ Configuration")
     
-    # City Selection
-    cities = ["London", "New York", "Tokyo", "Sydney", "Dubai", "Istanbul", "Mumbai"]
+    # City Selection (base list + user-added cities)
+    base_cities = [
+        "London", "New York", "Tokyo", "Sydney", "Dubai", "Istanbul", "Mumbai",
+        "Paris", "Berlin", "Los Angeles", "San Francisco", "Singapore", "Beijing",
+        "Seoul", "Cairo", "São Paulo", "Mexico City", "Johannesburg", "Toronto",
+        "Bangkok", "Riyadh", "Buenos Aires", "Amsterdam", "Barcelona", "Moscow"
+    ]
+    # Combine with user-added cities from session
+    cities = base_cities + st.session_state.get("extra_cities", [])
+
+    # Add free-text city
+    new_city = st.text_input("➕ Add City (free text)")
+    if st.button("Add City"):
+        if new_city:
+            if new_city not in st.session_state["extra_cities"]:
+                st.session_state["extra_cities"].append(new_city)
+                st.success(f"Added city: {new_city}")
+            else:
+                st.info(f"City already in list: {new_city}")
+
+    # Multi-select with optional Select-All
+    select_all_btn = st.button("Select All Cities")
+    default_selection = st.session_state.get("selected_cities", ["London", "New York", "Tokyo"])
+    if select_all_btn:
+        default_selection = cities.copy()
+        st.session_state["selected_cities"] = default_selection
+
     selected_cities = st.multiselect(
         "📍 Select Cities",
         cities,
-        default=["London", "New York", "Tokyo"]
+        default=default_selection
     )
     
     # Date Range
@@ -123,8 +160,12 @@ with st.sidebar:
     )
     
     if data_source == "Weather API (OpenWeatherMap)":
-        owm_api_key = st.text_input("🔑 OpenWeatherMap API Key", type="password")
+        default_key = os.getenv("OPENWEATHER_API_KEY", "")
+        owm_api_key = st.text_input("🔑 OpenWeatherMap API Key", value=default_key, type="password")
         owm_city = st.selectbox("📍 City for Live Feed", cities, index=0)
+        # persist in session for convenience during the app run
+        if owm_api_key:
+            st.session_state["owm_api_key"] = owm_api_key
     else:
         owm_api_key = None
         owm_city = None
@@ -431,52 +472,72 @@ with tab5:
     if stop:
         st.session_state["realtime_running"] = False
 
-    selected_city = owm_city if data_source.startswith("Weather API") and owm_city else (selected_cities[0] if selected_cities else cities[0])
+    selected_live_cities = st.multiselect(
+        "📍 Cities for Live Feed",
+        options=cities,
+        default=[owm_city] if owm_city else (selected_cities[:3] if selected_cities else [cities[0]])
+    )
+
+    if data_source.startswith("Weather API") and owm_api_key:
+        st.caption("⚠️ Note: Polling many cities frequently may hit OpenWeatherMap rate limits; increase poll interval if needed.")
+    elif data_source.startswith("Weather API") and not owm_api_key:
+        st.warning("Please provide OpenWeatherMap API key in the sidebar to fetch live data.")
 
     placeholder = st.empty()
 
-    # Simple polling loop — runs in the main thread while the feed is active.
+    # Polling loop — poll each selected city and render combined chart/table
     while st.session_state["realtime_running"]:
-        if data_source.startswith("Weather API"):
-            if not owm_api_key:
-                st.error("Please provide OpenWeatherMap API key in the sidebar.")
-                st.session_state["realtime_running"] = False
-                break
-            res = fetch_openweather(selected_city, owm_api_key)
-        else:
-            # Mock data
-            res = {
-                "timestamp": datetime.utcnow(),
-                "temperature": 15 + np.random.normal(0,1),
-                "humidity": 60 + np.random.normal(0,2)
-            }
-        if res:
-            lst = st.session_state["live_data"].setdefault(selected_city, [])
-            lst.append(res)
-            if len(lst) > max_points:
-                lst[:] = lst[-max_points:]
+        if not selected_live_cities:
+            placeholder.info("No cities selected for live feed.")
+            time.sleep(1)
+            continue
 
-        # Build DataFrame and update charts
-        df = pd.DataFrame(st.session_state["live_data"].get(selected_city, []))
-        if not df.empty:
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
-            fig_rt = go.Figure()
-            fig_rt.add_trace(go.Scatter(x=df["timestamp"], y=df["temperature"], mode="lines+markers", name="Temperature (°C)"))
-            fig_rt.add_trace(go.Scatter(x=df["timestamp"], y=df["humidity"], mode="lines+markers", name="Humidity (%)", yaxis="y2"))
-            fig_rt.update_layout(
-                xaxis_title="Time",
-                yaxis=dict(title="Temperature (°C)"),
-                yaxis2=dict(title="Humidity (%)", overlaying="y", side="right"),
-                height=400
-            )
-            placeholder.plotly_chart(fig_rt, use_container_width=True)
-            latest = df.iloc[-1]
-            c1, c2 = st.columns(2)
-            c1.metric("🌡️ Temperature", f"{latest['temperature']:.1f} °C")
-            c2.metric("💧 Humidity", f"{latest['humidity']:.0f}%")
-            st.dataframe(df.tail(10).assign(timestamp=lambda d: d["timestamp"].dt.strftime('%Y-%m-%d %H:%M:%S')), use_container_width=True, hide_index=True)
+        all_latest = []
+        for city in selected_live_cities:
+            if data_source.startswith("Weather API"):
+                if not owm_api_key:
+                    continue
+                res = fetch_openweather(city, owm_api_key)
+            else:
+                res = {"timestamp": datetime.utcnow(), "temperature": 15 + np.random.normal(0,1), "humidity": 60 + np.random.normal(0,2)}
+
+            if res:
+                lst = st.session_state["live_data"].setdefault(city, [])
+                lst.append(res)
+                if len(lst) > max_points:
+                    lst[:] = lst[-max_points:]
+                all_latest.append({"city": city, "timestamp": res["timestamp"], "temperature": res["temperature"], "humidity": res.get("humidity")})
+
+        # Build combined DataFrame and update charts
+        if all_latest:
+            df_all = []
+            for city in selected_live_cities:
+                city_df = pd.DataFrame(st.session_state["live_data"].get(city, []))
+                if not city_df.empty:
+                    city_df["timestamp"] = pd.to_datetime(city_df["timestamp"])
+                    city_df["city"] = city
+                    df_all.append(city_df[["timestamp", "city", "temperature", "humidity"]])
+            if df_all:
+                df_combined = pd.concat(df_all, ignore_index=True)
+                fig_rt = go.Figure()
+                for city in selected_live_cities:
+                    city_df = df_combined[df_combined["city"] == city]
+                    if not city_df.empty:
+                        fig_rt.add_trace(go.Scatter(x=city_df["timestamp"], y=city_df["temperature"], mode="lines+markers", name=f"{city} - Temp"))
+                        fig_rt.add_trace(go.Scatter(x=city_df["timestamp"], y=city_df["humidity"], mode="lines+markers", name=f"{city} - Hum", yaxis="y2"))
+                fig_rt.update_layout(
+                    xaxis_title="Time",
+                    yaxis=dict(title="Temperature (°C)"),
+                    yaxis2=dict(title="Humidity (%)", overlaying="y", side="right"),
+                    height=400
+                )
+                placeholder.plotly_chart(fig_rt, use_container_width=True)
+
+                latest_df = pd.DataFrame(all_latest).sort_values("city").set_index("city")
+                st.table(latest_df[["timestamp", "temperature", "humidity"]].assign(timestamp=lambda d: pd.to_datetime(d["timestamp"]).dt.strftime('%Y-%m-%d %H:%M:%S')))
         else:
             placeholder.info("No data yet. Waiting for first reading...")
+
         time.sleep(poll_interval)
 
 # FOOTER
