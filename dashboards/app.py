@@ -11,9 +11,36 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
 import logging
+import requests
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def fetch_openweather(city, api_key):
+    """Fetch current weather for a city from OpenWeatherMap (metric units)."""
+    url = "https://api.openweathermap.org/data/2.5/weather"
+    params = {"q": city, "units": "metric", "appid": api_key}
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        return {
+            "timestamp": datetime.utcfromtimestamp(data.get("dt", datetime.utcnow().timestamp())),
+            "temperature": data["main"]["temp"],
+            "humidity": data["main"]["humidity"],
+            "raw": data
+        }
+    except Exception as e:
+        logger.error("OpenWeather fetch error: %s", e)
+        return None
+
+# Ensure session state for live data
+if "live_data" not in st.session_state:
+    st.session_state["live_data"] = {}  # city -> list of readings
+
+if "realtime_running" not in st.session_state:
+    st.session_state["realtime_running"] = False
 
 # Page Configuration
 st.set_page_config(
@@ -89,14 +116,35 @@ with st.sidebar:
         value=30
     )
     
+    # Real-time Data Source
+    data_source = st.selectbox(
+        "🔁 Live Data Source",
+        ("Mock", "Weather API (OpenWeatherMap)")
+    )
+    
+    if data_source == "Weather API (OpenWeatherMap)":
+        owm_api_key = st.text_input("🔑 OpenWeatherMap API Key", type="password")
+        owm_city = st.selectbox("📍 City for Live Feed", cities, index=0)
+    else:
+        owm_api_key = None
+        owm_city = None
+    
+    poll_interval = st.slider(
+        "⏱️ Poll Interval (seconds)",
+        min_value=10,
+        max_value=600,
+        value=30,
+        step=5
+    )
+    
     st.divider()
     st.info("💡 **Tip**: Select multiple cities to compare climate patterns across regions.")
 
 
 # MAIN CONTENT - TABS
 
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["📊 Overview", "📈 Trends", "🔮 Forecast", "📉 Analytics"]
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    ["📊 Overview", "📈 Trends", "🔮 Forecast", "📉 Analytics", "🔴 Real-time"]
 )
 
 
@@ -365,6 +413,71 @@ with tab4:
     st.warning(f"⚠️ **{len(detected_anomalies)} anomalies detected!**")
     st.dataframe(detected_anomalies, use_container_width=True, hide_index=True)
 
+
+# TAB 5: REAL-TIME
+
+with tab5:
+    st.header("🔴 Real-time Temperature & Humidity")
+    st.info(f"Using data source: **{data_source}**")
+    
+    col1, col2 = st.columns([2, 1])
+    with col2:
+        start = st.button("▶️ Start Live Feed")
+        stop = st.button("⏹️ Stop Live Feed")
+        max_points = st.number_input("Max Points to Keep", min_value=50, max_value=1000, value=300, step=50)
+    
+    if start:
+        st.session_state["realtime_running"] = True
+    if stop:
+        st.session_state["realtime_running"] = False
+
+    selected_city = owm_city if data_source.startswith("Weather API") and owm_city else (selected_cities[0] if selected_cities else cities[0])
+
+    placeholder = st.empty()
+
+    # Simple polling loop — runs in the main thread while the feed is active.
+    while st.session_state["realtime_running"]:
+        if data_source.startswith("Weather API"):
+            if not owm_api_key:
+                st.error("Please provide OpenWeatherMap API key in the sidebar.")
+                st.session_state["realtime_running"] = False
+                break
+            res = fetch_openweather(selected_city, owm_api_key)
+        else:
+            # Mock data
+            res = {
+                "timestamp": datetime.utcnow(),
+                "temperature": 15 + np.random.normal(0,1),
+                "humidity": 60 + np.random.normal(0,2)
+            }
+        if res:
+            lst = st.session_state["live_data"].setdefault(selected_city, [])
+            lst.append(res)
+            if len(lst) > max_points:
+                lst[:] = lst[-max_points:]
+
+        # Build DataFrame and update charts
+        df = pd.DataFrame(st.session_state["live_data"].get(selected_city, []))
+        if not df.empty:
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+            fig_rt = go.Figure()
+            fig_rt.add_trace(go.Scatter(x=df["timestamp"], y=df["temperature"], mode="lines+markers", name="Temperature (°C)"))
+            fig_rt.add_trace(go.Scatter(x=df["timestamp"], y=df["humidity"], mode="lines+markers", name="Humidity (%)", yaxis="y2"))
+            fig_rt.update_layout(
+                xaxis_title="Time",
+                yaxis=dict(title="Temperature (°C)"),
+                yaxis2=dict(title="Humidity (%)", overlaying="y", side="right"),
+                height=400
+            )
+            placeholder.plotly_chart(fig_rt, use_container_width=True)
+            latest = df.iloc[-1]
+            c1, c2 = st.columns(2)
+            c1.metric("🌡️ Temperature", f"{latest['temperature']:.1f} °C")
+            c2.metric("💧 Humidity", f"{latest['humidity']:.0f}%")
+            st.dataframe(df.tail(10).assign(timestamp=lambda d: d["timestamp"].dt.strftime('%Y-%m-%d %H:%M:%S')), use_container_width=True, hide_index=True)
+        else:
+            placeholder.info("No data yet. Waiting for first reading...")
+        time.sleep(poll_interval)
 
 # FOOTER
 
