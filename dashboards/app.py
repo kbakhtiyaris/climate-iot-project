@@ -11,9 +11,84 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
 import logging
+import requests
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def fetch_openweather(city, api_key):
+    """Fetch current weather for a city from OpenWeatherMap (metric units)."""
+    url = "https://api.openweathermap.org/data/2.5/weather"
+    params = {"q": city, "units": "metric", "appid": api_key}
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        return {
+            "timestamp": datetime.utcfromtimestamp(data.get("dt", datetime.utcnow().timestamp())),
+            "temperature": data["main"]["temp"],
+            "humidity": data["main"]["humidity"],
+            "raw": data
+        }
+    except Exception as e:
+        logger.error("OpenWeather fetch error: %s", e)
+        return None
+
+# Ensure session state for live data
+if "live_data" not in st.session_state:
+    st.session_state["live_data"] = {}  # city -> list of readings
+
+if "realtime_running" not in st.session_state:
+    st.session_state["realtime_running"] = False
+
+
+def fetch_current_for_cities(cities, api_key, max_points=300):
+    """Fetch current weather for a list of cities and append to session_state live_data."""
+    results = {}
+    if not api_key:
+        return results
+    for city in cities:
+        try:
+            res = fetch_openweather(city, api_key)
+            if res:
+                results[city] = res
+                lst = st.session_state["live_data"].setdefault(city, [])
+                lst.append(res)
+                if len(lst) > max_points:
+                    lst[:] = lst[-max_points:]
+        except Exception as e:
+            logger.error("Error fetching city %s: %s", city, e)
+    return results
+
+
+def simple_forecast_from_series(series_timestamps, series_temps, forecast_days):
+    """Simple linear-extrapolation forecast using polyfit degree 1.
+    Returns DataFrame with Date, Forecast, Upper_CI, Lower_CI
+    """
+    if len(series_temps) < 3:
+        # Not enough data — repeat last value
+        last = series_temps[-1] if series_temps else 15.0
+        future_days = pd.date_range(end=datetime.now(), periods=forecast_days, freq='D')
+        forecast = [last] * forecast_days
+        return pd.DataFrame({
+            'Date': future_days,
+            'Forecast': forecast,
+            'Upper_CI': [f + 1.0 for f in forecast],
+            'Lower_CI': [f - 1.0 for f in forecast],
+        })
+
+    # convert timestamps to days relative to first timestamp
+    x = np.array([(ts - series_timestamps[0]).total_seconds() / 86400.0 for ts in series_timestamps])
+    y = np.array(series_temps)
+    slope, intercept = np.polyfit(x, y, 1)
+    last_x = x[-1]
+    future_x = last_x + np.arange(1, forecast_days + 1)
+    future_dates = [series_timestamps[-1] + timedelta(days=int(i)) for i in range(1, forecast_days + 1)]
+    preds = intercept + slope * future_x
+    upper = preds + 2.0
+    lower = preds - 2.0
+    return pd.DataFrame({'Date': future_dates, 'Forecast': preds, 'Upper_CI': upper, 'Lower_CI': lower})
 
 # Page Configuration
 st.set_page_config(
@@ -89,14 +164,41 @@ with st.sidebar:
         value=30
     )
     
+    # Real-time Data Source
+    data_source = st.selectbox(
+        "🔁 Live Data Source",
+        ("Mock", "Weather API (OpenWeatherMap)")
+    )
+    
+    if data_source == "Weather API (OpenWeatherMap)":
+        owm_api_key = st.text_input("🔑 OpenWeatherMap API Key", type="password")
+        owm_city = st.selectbox("📍 City for Live Feed", cities, index=0)
+    else:
+        owm_api_key = None
+        owm_city = None
+    
+    poll_interval = st.slider(
+        "⏱️ Poll Interval (seconds)",
+        min_value=10,
+        max_value=600,
+        value=30,
+        step=5
+    )
+
+    update_now = st.button("🔄 Update Now")
+    
     st.divider()
     st.info("💡 **Tip**: Select multiple cities to compare climate patterns across regions.")
+
+    # If user pressed Update Now and using Weather API, fetch current readings
+    if update_now and data_source.startswith("Weather API") and owm_api_key:
+        fetch_current_for_cities(selected_cities, owm_api_key)
 
 
 # MAIN CONTENT - TABS
 
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["📊 Overview", "📈 Trends", "🔮 Forecast", "📉 Analytics"]
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    ["📊 Overview", "📈 Trends", "🔮 Forecast", "📉 Analytics", "🔴 Real-time"]
 )
 
 
@@ -105,39 +207,58 @@ tab1, tab2, tab3, tab4 = st.tabs(
 with tab1:
     st.header("📊 Current Climate Overview")
     
-    # Current Metrics Cards
+    # Current Metrics Cards (dynamic)
     col1, col2, col3, col4 = st.columns(4)
-    
+
+    # Gather current readings for selected cities
+    current_readings = {}
+    if data_source.startswith("Weather API") and owm_api_key:
+        current_readings = fetch_current_for_cities(selected_cities, owm_api_key)
+    else:
+        for city in selected_cities:
+            lst = st.session_state["live_data"].get(city, [])
+            if lst:
+                current_readings[city] = lst[-1]
+            else:
+                temp_col = f"{city}_Temp"
+                hum_col = f"{city}_Humidity"
+                if 'trend_data' in globals() and temp_col in trend_data.columns:
+                    current_readings[city] = {
+                        "timestamp": trend_data['Date'].iloc[-1],
+                        "temperature": float(trend_data[temp_col].iloc[-1]),
+                        "humidity": float(trend_data[hum_col].iloc[-1]) if hum_col in trend_data.columns else None
+                    }
+
+    temps = [v['temperature'] for v in current_readings.values() if v and 'temperature' in v]
+    hums = [v['humidity'] for v in current_readings.values() if v and 'humidity' in v]
+
+    avg_temp = np.mean(temps) if temps else None
+    avg_hum = np.mean(hums) if hums else None
+
+    prev_avg = st.session_state.get('prev_avg_temp')
+    delta_temp = None
+    if avg_temp is not None and prev_avg is not None:
+        delta_temp = avg_temp - prev_avg
+    st.session_state['prev_avg_temp'] = avg_temp
+
     with col1:
-        st.metric(
-            label="🌡️ Avg Temperature",
-            value="18.5°C",
-            delta="-2.1°C",
-            delta_color="inverse"
-        )
-    
+        if avg_temp is not None:
+            st.metric(label="🌡️ Avg Temperature", value=f"{avg_temp:.1f}°C", delta=(f"{delta_temp:+.1f}°C" if delta_temp is not None else ""))
+        else:
+            st.metric(label="🌡️ Avg Temperature", value="N/A")
+
     with col2:
-        st.metric(
-            label="💧 Humidity",
-            value="72%",
-            delta="+5%"
-        )
-    
+        if avg_hum is not None:
+            st.metric(label="💧 Humidity", value=f"{avg_hum:.0f}%")
+        else:
+            st.metric(label="💧 Humidity", value="N/A")
+
+    # Keep placeholders for precipitation and wind speed for now
     with col3:
-        st.metric(
-            label="🌧️ Precipitation",
-            value="12 mm",
-            delta="-3 mm",
-            delta_color="inverse"
-        )
-    
+        st.metric(label="🌧️ Precipitation", value="—")
     with col4:
-        st.metric(
-            label="💨 Wind Speed",
-            value="4.2 m/s",
-            delta="+0.5 m/s"
-        )
-    
+        st.metric(label="💨 Wind Speed", value="—")
+
     st.divider()
     
     # Global Map Heatmap (Placeholder)
@@ -241,69 +362,69 @@ with tab3:
     
     st.info(f"📅 Forecasting **{forecast_days}** days ahead using **{model_type}** model")
     
-    # Generate Forecast Data
-    future_days = pd.date_range(end=datetime.now(), periods=forecast_days, freq='D')
-    np.random.seed(42)
-    
-    forecast_data = pd.DataFrame({
-        'Date': future_days,
-        'Forecast': 15 + np.sin(np.arange(forecast_days)/10) * 5 + np.random.normal(0, 0.5, forecast_days),
-        'Upper_CI': 15 + np.sin(np.arange(forecast_days)/10) * 5 + 2 + np.random.normal(0, 0.5, forecast_days),
-        'Lower_CI': 15 + np.sin(np.arange(forecast_days)/10) * 5 - 2 + np.random.normal(0, 0.5, forecast_days),
-    })
-    
+    # Build data-driven forecast
+    primary_city = selected_cities[0] if selected_cities else (owm_city or cities[0])
+
+    series_ts = []
+    series_temps = []
+    # Prefer live session data
+    live_list = st.session_state["live_data"].get(primary_city, [])
+    if live_list and len(live_list) >= 2:
+        series_ts = [pd.to_datetime(x['timestamp']) for x in live_list]
+        series_temps = [float(x['temperature']) for x in live_list]
+    else:
+        # Fallback to trend_data if available
+        temp_col = f"{primary_city}_Temp"
+        if 'trend_data' in globals() and temp_col in trend_data.columns:
+            series_ts = list(trend_data['Date'].iloc[-30:])
+            series_temps = list(trend_data[temp_col].iloc[-30:])
+        else:
+            # Very small mock series
+            series_ts = [datetime.utcnow() - timedelta(days=i) for i in range(7)][::-1]
+            series_temps = [15 + np.random.normal(0, 1) for _ in series_ts]
+
+    forecast_data = simple_forecast_from_series(series_ts, series_temps, forecast_days)
+
     # Forecast Chart with Confidence Intervals
     st.subheader("📊 Temperature Forecast with Confidence Intervals")
-    
+
     fig_forecast = go.Figure()
-    
-    # Forecast line
-    fig_forecast.add_trace(go.Scatter(
-        x=forecast_data['Date'], y=forecast_data['Forecast'],
-        mode='lines',
-        name='Forecast',
-        line=dict(color='blue', width=3)
-    ))
-    
-    # Confidence Interval
-    fig_forecast.add_trace(go.Scatter(
-        x=forecast_data['Date'].tolist() + forecast_data['Date'][::-1].tolist(),
-        y=forecast_data['Upper_CI'].tolist() + forecast_data['Lower_CI'][::-1].tolist(),
-        fill='toself',
-        name='95% Confidence Interval',
-        fillcolor='rgba(0,100,200,0.2)',
-        line=dict(color='rgba(255,255,255,0)')
-    ))
-    
-    fig_forecast.update_layout(
-        height=400,
-        title="7-Day Temperature Forecast",
-        xaxis_title="Date",
-        yaxis_title="Temperature (°C)",
-        hovermode='x unified'
-    )
-    
+    fig_forecast.add_trace(go.Scatter(x=forecast_data['Date'], y=forecast_data['Forecast'], mode='lines', name='Forecast', line=dict(color='blue', width=3)))
+    fig_forecast.add_trace(go.Scatter(x=forecast_data['Date'].tolist() + forecast_data['Date'][::-1].tolist(), y=forecast_data['Upper_CI'].tolist() + forecast_data['Lower_CI'][::-1].tolist(), fill='toself', name='Confidence Interval', fillcolor='rgba(0,100,200,0.2)', line=dict(color='rgba(255,255,255,0)')))
+
+    fig_forecast.update_layout(height=400, title=f"{forecast_days}-Day Temperature Forecast ({primary_city})", xaxis_title="Date", yaxis_title="Temperature (°C)", hovermode='x unified')
+
     st.plotly_chart(fig_forecast, use_container_width=True)
-    
+
     # Forecast Table
     st.subheader("📋 Forecast Details")
     forecast_table = forecast_data.copy()
     forecast_table['Date'] = forecast_table['Date'].dt.strftime('%Y-%m-%d')
     forecast_table = forecast_table.round(2)
     st.dataframe(forecast_table, use_container_width=True, hide_index=True)
-    
-    # Model Performance Metrics
+
+    # Simple performance metrics (residuals on training data)
+    if len(series_temps) >= 3:
+        x = np.array([(ts - series_ts[0]).total_seconds() / 86400.0 for ts in series_ts])
+        y = np.array(series_temps)
+        slope, intercept = np.polyfit(x, y, 1)
+        preds_in = intercept + slope * x
+        mae = np.mean(np.abs(y - preds_in))
+        rmse = np.sqrt(np.mean((y - preds_in) ** 2))
+        r2 = 1 - np.sum((y - preds_in) ** 2) / np.sum((y - np.mean(y)) ** 2)
+    else:
+        mae = rmse = r2 = None
+
     st.subheader("🎯 Model Performance Metrics")
     col1, col2, col3, col4 = st.columns(4)
-    
     with col1:
-        st.metric("MAE", "1.82°C", "↓ -0.15")
+        st.metric("MAE", f"{mae:.2f}°C" if mae is not None else "N/A")
     with col2:
-        st.metric("RMSE", "2.34°C", "↓ -0.22")
+        st.metric("RMSE", f"{rmse:.2f}°C" if rmse is not None else "N/A")
     with col3:
-        st.metric("R² Score", "0.87", "↑ +0.03")
+        st.metric("R² Score", f"{r2:.2f}" if r2 is not None else "N/A")
     with col4:
-        st.metric("MAPE", "8.2%", "↓ -0.5%")
+        st.metric("MAPE", "N/A")
 
 
 # TAB 4: ANALYTICS
@@ -365,6 +486,71 @@ with tab4:
     st.warning(f"⚠️ **{len(detected_anomalies)} anomalies detected!**")
     st.dataframe(detected_anomalies, use_container_width=True, hide_index=True)
 
+
+# TAB 5: REAL-TIME
+
+with tab5:
+    st.header("🔴 Real-time Temperature & Humidity")
+    st.info(f"Using data source: **{data_source}**")
+    
+    col1, col2 = st.columns([2, 1])
+    with col2:
+        start = st.button("▶️ Start Live Feed")
+        stop = st.button("⏹️ Stop Live Feed")
+        max_points = st.number_input("Max Points to Keep", min_value=50, max_value=1000, value=300, step=50)
+    
+    if start:
+        st.session_state["realtime_running"] = True
+    if stop:
+        st.session_state["realtime_running"] = False
+
+    selected_city = owm_city if data_source.startswith("Weather API") and owm_city else (selected_cities[0] if selected_cities else cities[0])
+
+    placeholder = st.empty()
+
+    # Simple polling loop — runs in the main thread while the feed is active.
+    while st.session_state["realtime_running"]:
+        if data_source.startswith("Weather API"):
+            if not owm_api_key:
+                st.error("Please provide OpenWeatherMap API key in the sidebar.")
+                st.session_state["realtime_running"] = False
+                break
+            res = fetch_openweather(selected_city, owm_api_key)
+        else:
+            # Mock data
+            res = {
+                "timestamp": datetime.utcnow(),
+                "temperature": 15 + np.random.normal(0,1),
+                "humidity": 60 + np.random.normal(0,2)
+            }
+        if res:
+            lst = st.session_state["live_data"].setdefault(selected_city, [])
+            lst.append(res)
+            if len(lst) > max_points:
+                lst[:] = lst[-max_points:]
+
+        # Build DataFrame and update charts
+        df = pd.DataFrame(st.session_state["live_data"].get(selected_city, []))
+        if not df.empty:
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+            fig_rt = go.Figure()
+            fig_rt.add_trace(go.Scatter(x=df["timestamp"], y=df["temperature"], mode="lines+markers", name="Temperature (°C)"))
+            fig_rt.add_trace(go.Scatter(x=df["timestamp"], y=df["humidity"], mode="lines+markers", name="Humidity (%)", yaxis="y2"))
+            fig_rt.update_layout(
+                xaxis_title="Time",
+                yaxis=dict(title="Temperature (°C)"),
+                yaxis2=dict(title="Humidity (%)", overlaying="y", side="right"),
+                height=400
+            )
+            placeholder.plotly_chart(fig_rt, use_container_width=True)
+            latest = df.iloc[-1]
+            c1, c2 = st.columns(2)
+            c1.metric("🌡️ Temperature", f"{latest['temperature']:.1f} °C")
+            c2.metric("💧 Humidity", f"{latest['humidity']:.0f}%")
+            st.dataframe(df.tail(10).assign(timestamp=lambda d: d["timestamp"].dt.strftime('%Y-%m-%d %H:%M:%S')), use_container_width=True, hide_index=True)
+        else:
+            placeholder.info("No data yet. Waiting for first reading...")
+        time.sleep(poll_interval)
 
 # FOOTER
 
