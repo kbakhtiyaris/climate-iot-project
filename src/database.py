@@ -2,6 +2,7 @@ from sqlalchemy import create_engine, Column, String, Float, Date, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
+import urllib.parse
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,7 +14,12 @@ DB_NAME = os.getenv("DB_NAME", "climate_iot")
 DB_USER = os.getenv("DB_USER", "postgres")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
-DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+# Build DATABASE_URL safely: percent-encode password if present, omit it if empty
+if DB_PASSWORD:
+    _pwd = urllib.parse.quote_plus(DB_PASSWORD)
+    DATABASE_URL = f"postgresql://{DB_USER}:{_pwd}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+else:
+    DATABASE_URL = f"postgresql://{DB_USER}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -59,6 +65,11 @@ def init_db():
         
     except Exception as e:
         print(f"✗ Error: {e}\n")
+        err = str(e).lower()
+        if "no password supplied" in err or "fe_sendauth" in err or "authentication failed" in err:
+            print("⚠️ Hint: PostgreSQL requires a valid password for this connection.")
+            print("Make sure `DB_PASSWORD` is set in your environment (or in .env). If it contains special characters, they will be URL-encoded automatically.")
+            print("Example (in .env): DB_PASSWORD=your_password")
         raise
 
 def get_session():
