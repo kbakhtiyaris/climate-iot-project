@@ -241,7 +241,7 @@ with st.sidebar:
                         st.info(f"City already in list: {new_city}")
 
         select_all_btn = st.button("Select All Cities")
-        default_selection = st.session_state.get("selected_cities", ["London", "New York", "Tokyo"])
+        default_selection = st.session_state.get("selected_cities", ["Istanbul", "New York", "Tokyo"])
         if select_all_btn:
             default_selection = cities_all.copy()
             st.session_state["selected_cities"] = default_selection
@@ -682,5 +682,8 @@ st.markdown("""
 
     Built with Streamlit | Powered by PostgreSQL + TimescaleDB | Deployed on AWS EC2
 
-    **Last updated: 2025-12-07 23:30 UTC*
+    **Last updated: 2025-12-23 23:30 UTC*
+	Credit: Khud Bakhtiyar Iqbal Sofi
+		co-author:Abadul Rahman
+		co-author:Mazen Ibrahem
     """, unsafe_allow_html=True)
