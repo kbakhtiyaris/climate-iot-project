@@ -249,4 +249,4 @@ logs/*
 # OS
 Thumbs.db
 
-timescaledb/
+!timescaledb/
