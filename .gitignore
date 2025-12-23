@@ -231,7 +231,7 @@ ENV/
 data/raw/*
 data/processed/*
 !data/raw/.gitkeep
-!data/**/.csv
+!data/**/*.csv
 !data/processed/.gitkeep
 data/**/*.parquet
 
