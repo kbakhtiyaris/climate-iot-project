@@ -330,4 +330,13 @@ At the end, your app is reachable at:
 
 ***
 Screenshots from the dashboard:
+1. <img width="1363" height="693" alt="Screenshot from 2025-12-23 23-16-22" src="https://github.com/user-attachments/assets/f5267f05-af95-4dec-9468-9ff52cfa1055" />
+2. <img width="1363" height="693" alt="Screenshot from 2025-12-23 23-17-13" src="https://github.com/user-attachments/assets/9a35b701-ceb6-43d6-9d10-e4a77276246f" />
+3. <img width="1363" height="693" alt="Screenshot from 2025-12-23 23-17-41" src="https://github.com/user-attachments/assets/209eb58a-f882-44ab-ba57-3b44e82dae0e" />
+4. <img width="1363" height="693" alt="Screenshot from 2025-12-23 23-18-57" src="https://github.com/user-attachments/assets/41853323-d94c-4e39-b0d6-2fa3a2811c52" />
+5. <img width="1363" height="693" alt="Screenshot from 2025-12-23 23-19-35" src="https://github.com/user-attachments/assets/9d73eed1-6130-4eae-8286-22211ad7a348" />
+6. <img width="1363" height="693" alt="Screenshot from 2025-12-23 23-21-26" src="https://github.com/user-attachments/assets/7412e334-dfee-42d6-9052-7d5477615846" />
+
+
+
 
