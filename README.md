@@ -4,6 +4,7 @@
 An end‑to‑end **IoT‑style weather analytics and forecasting platform** that ingests global daily climate data, stores it in a time‑series database, trains forecasting models, and exposes interactive visualizations and predictions through a Streamlit dashboard deployed on a public domain.
 
 **Live demo:** https://weather-iot.duckdns.org
+##Due to AWS's paid plan; live demo is taken down and will continue the same untill further updates. ##
 
 > **Tech stack:** Python, Pandas, PostgreSQL, TimescaleDB, Streamlit, ARIMA/Prophet, AWS EC2, DuckDNS, Nginx.
 
